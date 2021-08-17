@@ -9,6 +9,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/IR/LLVMContext.h"
@@ -16,10 +17,25 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IRReader/IRReader.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCInstPrinter.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/MCTargetOptionsCommandFlags.h"
+#include "llvm/MC/MCParser/MCAsmParser.h"
+#include "llvm/MC/MCParser/MCTargetAsmParser.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCStreamer.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/PrettyStackTrace.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
@@ -57,6 +73,10 @@ llvm::cl::opt<std::string> opt_src_fn(LLVM_ARGS_PREFIX "src-fn",
 llvm::cl::opt<std::string> opt_tgt_fn(LLVM_ARGS_PREFIX"tgt-fn",
   llvm::cl::desc("Name of tgt function (without @)"),
   llvm::cl::cat(alive_cmdargs), llvm::cl::init("tgt"));
+
+llvm::cl::opt<bool> opt_backend_tv(LLVM_ARGS_PREFIX "backend-tv",
+  llvm::cl::desc("Verify operation of a backend (default=false)"),
+  llvm::cl::init(false), llvm::cl::cat(alive_cmdargs));
 
 
 llvm::ExitOnError ExitOnErr;
@@ -274,12 +294,242 @@ llvm::Function *findFunction(llvm::Module &M, const string &FName) {
 }
 }
 
+static llvm::mc::RegisterMCTargetOptionsFlags MOF;
+
+class MCStreamerWrapper final : public llvm::MCStreamer {
+public:
+  std::vector<llvm::MCInst> Insts;
+
+  MCStreamerWrapper(llvm::MCContext &Context)
+      : MCStreamer(Context) {}
+
+  // We only want to intercept the emission of new instructions.
+  virtual void emitInstruction(const llvm::MCInst &Inst,
+                               const llvm::MCSubtargetInfo & /* unused */) override {
+    Insts.push_back(Inst);
+  }
+
+  bool emitSymbolAttribute(llvm::MCSymbol *Symbol, llvm::MCSymbolAttr Attribute) override {
+    return true;
+  }
+
+  void emitCommonSymbol(llvm::MCSymbol *Symbol, uint64_t Size,
+                        unsigned ByteAlignment) override {}
+  void emitZerofill(llvm::MCSection *Section, llvm::MCSymbol *Symbol = nullptr,
+                    uint64_t Size = 0, unsigned ByteAlignment = 0,
+                    llvm::SMLoc Loc = llvm::SMLoc()) override {}
+  void emitGPRel32Value(const llvm::MCExpr *Value) override {}
+  void BeginCOFFSymbolDef(const llvm::MCSymbol *Symbol) override {}
+  void EmitCOFFSymbolStorageClass(int StorageClass) override {}
+  void EmitCOFFSymbolType(int Type) override {}
+  void EndCOFFSymbolDef() override {}
+
+  /*
+  ArrayRef<llvm::MCInst> GetInstructionSequence(unsigned Index) const {
+    return Regions.getInstructionSequence(Index);
+  }
+  */
+};
+
+void backendTV() {
+  if (!opt_file2.empty()) {
+    cerr << "Please only specify one bitcode file when validating a backend\n";
+    exit(-1);    
+  }
+
+  llvm::LLVMContext Context;
+  auto M1 = openInputFile(Context, opt_file1);
+  if (!M1.get()) {
+    cerr << "Could not read bitcode from '" << opt_file1 << "'\n";
+    exit(-1);
+  }
+
+#define ARGS_MODULE_VAR M1
+# include "llvm_util/cmd_args_def.h"
+
+  auto &DL = M1.get()->getDataLayout();
+  llvm::Triple targetTriple(M1.get()->getTargetTriple());
+  llvm::TargetLibraryInfoWrapperPass TLI(targetTriple);
+
+  llvm_util::initializer llvm_util_init(*out, DL);
+  smt_init.emplace();
+
+  LLVMInitializeAArch64TargetInfo();
+  LLVMInitializeAArch64Target();
+  LLVMInitializeAArch64TargetMC();
+  LLVMInitializeAArch64AsmParser();
+  LLVMInitializeAArch64AsmPrinter();
+ 
+  std::string Error;
+  const char *TripleName = "aarch64";
+  auto Target = llvm::TargetRegistry::lookupTarget(TripleName, Error);
+  if (!Target) {
+    cerr << Error;
+    exit(-1);
+  }
+  llvm::TargetOptions Opt;
+  const char *CPU = "apple-a12";
+  auto RM = llvm::Optional<llvm::Reloc::Model>();
+  auto TM = Target->createTargetMachine(TripleName, CPU, "", Opt, RM);
+
+  llvm::SmallString<1024> Asm;
+  llvm::raw_svector_ostream Dest(Asm);
+
+  llvm::legacy::PassManager pass;
+  if (TM->addPassesToEmitFile(pass, Dest, nullptr, llvm::CGFT_AssemblyFile)) {
+    cerr << "Failed to generate assembly";
+    exit(-1);
+  }
+  pass.run(*M1);
+
+  // FIXME only do this in verbose mode, or something
+  for (int i=0; i<Asm.size(); ++i)
+    cout << Asm[i];
+  cout << "\n\n";
+
+  llvm::Triple TheTriple(TripleName);
+
+  auto MCOptions = llvm::mc::InitMCTargetOptionsFromFlags();
+  std::unique_ptr<llvm::MCRegisterInfo> MRI(Target->createMCRegInfo(TripleName));
+  assert(MRI && "Unable to create target register info!");
+
+  std::unique_ptr<llvm::MCAsmInfo> MAI(
+      Target->createMCAsmInfo(*MRI, TripleName, MCOptions));
+  assert(MAI && "Unable to create MC asm info!");
+
+  std::unique_ptr<llvm::MCSubtargetInfo> STI(
+      Target->createMCSubtargetInfo(TripleName, CPU, ""));
+  assert(STI && "Unable to create subtarget info!");
+  assert(STI->isCPUStringValid(CPU) && "Invalid CPU!");
+
+  llvm::MCContext Ctx(TheTriple, MAI.get(), MRI.get(), STI.get());
+
+  llvm::SourceMgr SrcMgr;
+  auto Buf = llvm::MemoryBuffer::getMemBuffer(Asm);
+  assert(Buf);
+  SrcMgr.AddNewSourceBuffer(std::move(Buf), llvm::SMLoc());
+
+  std::unique_ptr<llvm::MCInstrInfo> MCII(Target->createMCInstrInfo());
+  assert(MCII && "Unable to create instruction info!");
+
+  std::unique_ptr<llvm::MCInstPrinter> IPtemp(Target->createMCInstPrinter(
+      TheTriple, 0, *MAI, *MCII, *MRI));
+
+  MCStreamerWrapper Str(Ctx);
+  
+  std::unique_ptr<llvm::MCAsmParser> Parser(
+      llvm::createMCAsmParser(SrcMgr, Ctx, Str, *MAI));
+  assert(Parser);
+  
+  llvm::MCTargetOptions Opts;
+  std::unique_ptr<llvm::MCTargetAsmParser> TAP(
+      Target->createMCAsmParser(*STI, *Parser, *MCII, Opts));
+  assert(TAP);
+  Parser->setTargetParser(*TAP);
+  Parser->Run(true); // ??
+
+  // FIXME Nader your code here
+  cout << "\n\nParsed MCInsts:\n";
+  for (auto I : Str.Insts)
+    I.dump();
+  cout << "\n\n";
+  
+/*
+  auto SRC = findFunction(*M1, opt_src_fn);
+  auto TGT = findFunction(*M1, opt_tgt_fn);
+  if (SRC && TGT) {
+    compareFunctions(*SRC, *TGT, TLI);
+    return;
+  } else {
+    M2 = CloneModule(*M1);
+    optimizeModule(M2.get());
+  }
+
+  // FIXME: quadratic, may not be suitable for very large modules
+  // emitted by opt-fuzz
+  for (auto &F1 : *M1.get()) {
+    if (F1.isDeclaration())
+      continue;
+    if (!func_names.empty() && !func_names.count(F1.getName().str()))
+      continue;
+    for (auto &F2 : *M2.get()) {
+      if (F2.isDeclaration() || F1.getName() != F2.getName())
+        continue;
+      if (!compareFunctions(F1, F2, TLI))
+        if (opt_error_fatal)
+          return;
+      break;
+    }
+  }
+
+  */
+}
+
+void bitcodeTV() {
+  llvm::LLVMContext Context;
+  auto M1 = openInputFile(Context, opt_file1);
+  if (!M1.get()) {
+    cerr << "Could not read bitcode from '" << opt_file1 << "'\n";
+    exit(-1);
+  }
+
+#define ARGS_MODULE_VAR M1
+# include "llvm_util/cmd_args_def.h"
+
+  auto &DL = M1.get()->getDataLayout();
+  llvm::Triple targetTriple(M1.get()->getTargetTriple());
+  llvm::TargetLibraryInfoWrapperPass TLI(targetTriple);
+
+  llvm_util::initializer llvm_util_init(*out, DL);
+  smt_init.emplace();
+
+  unique_ptr<llvm::Module> M2;
+  if (opt_file2.empty()) {
+    auto SRC = findFunction(*M1, opt_src_fn);
+    auto TGT = findFunction(*M1, opt_tgt_fn);
+    if (SRC && TGT) {
+      compareFunctions(*SRC, *TGT, TLI);
+      return;
+    } else {
+      M2 = CloneModule(*M1);
+      optimizeModule(M2.get());
+    }
+  } else {
+    M2 = openInputFile(Context, opt_file2);
+    if (!M2.get()) {
+      *out << "Could not read bitcode from '" << opt_file2 << "'\n";
+      exit(-1);
+    }
+  }
+
+  if (M1.get()->getTargetTriple() != M2.get()->getTargetTriple()) {
+    *out << "Modules have different target triples\n";
+    exit(-1);
+  }
+
+  // FIXME: quadratic, may not be suitable for very large modules
+  // emitted by opt-fuzz
+  for (auto &F1 : *M1.get()) {
+    if (F1.isDeclaration())
+      continue;
+    if (!func_names.empty() && !func_names.count(F1.getName().str()))
+      continue;
+    for (auto &F2 : *M2.get()) {
+      if (F2.isDeclaration() || F1.getName() != F2.getName())
+        continue;
+      if (!compareFunctions(F1, F2, TLI))
+        if (opt_error_fatal)
+          return;
+      break;
+    }
+  }
+}
+
 int main(int argc, char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
   llvm::PrettyStackTraceProgram X(argc, argv);
   llvm::EnableDebugBuffering = true;
   llvm::llvm_shutdown_obj llvm_shutdown; // Call llvm_shutdown() on exit.
-  llvm::LLVMContext Context;
 
   std::string Usage =
       R"EOF(Alive2 stand-alone translation validator:
@@ -310,70 +560,18 @@ convenient way to demonstrate an existing optimizer bug.
   llvm::cl::HideUnrelatedOptions(alive_cmdargs);
   llvm::cl::ParseCommandLineOptions(argc, argv, Usage);
 
-  auto M1 = openInputFile(Context, opt_file1);
-  if (!M1.get()) {
-    cerr << "Could not read bitcode from '" << opt_file1 << "'\n";
-    return -1;
-  }
-
-#define ARGS_MODULE_VAR M1
-# include "llvm_util/cmd_args_def.h"
-
-  auto &DL = M1.get()->getDataLayout();
-  llvm::Triple targetTriple(M1.get()->getTargetTriple());
-  llvm::TargetLibraryInfoWrapperPass TLI(targetTriple);
-
-  llvm_util::initializer llvm_util_init(*out, DL);
-  smt_init.emplace();
-
-  unique_ptr<llvm::Module> M2;
-  if (opt_file2.empty()) {
-    auto SRC = findFunction(*M1, opt_src_fn);
-    auto TGT = findFunction(*M1, opt_tgt_fn);
-    if (SRC && TGT) {
-      compareFunctions(*SRC, *TGT, TLI);
-      goto end;
-    } else {
-      M2 = CloneModule(*M1);
-      optimizeModule(M2.get());
-    }
+  if (opt_backend_tv) {
+    backendTV();
   } else {
-    M2 = openInputFile(Context, opt_file2);
-    if (!M2.get()) {
-      *out << "Could not read bitcode from '" << opt_file2 << "'\n";
-      return -1;
-    }
+    bitcodeTV();
   }
-
-  if (M1.get()->getTargetTriple() != M2.get()->getTargetTriple()) {
-    *out << "Modules have different target triples\n";
-    return -1;
-  }
-
-  // FIXME: quadratic, may not be suitable for very large modules
-  // emitted by opt-fuzz
-  for (auto &F1 : *M1.get()) {
-    if (F1.isDeclaration())
-      continue;
-    if (!func_names.empty() && !func_names.count(F1.getName().str()))
-      continue;
-    for (auto &F2 : *M2.get()) {
-      if (F2.isDeclaration() || F1.getName() != F2.getName())
-        continue;
-      if (!compareFunctions(F1, F2, TLI))
-        if (opt_error_fatal)
-          goto end;
-      break;
-    }
-  }
-
+  
   *out << "Summary:\n"
           "  " << num_correct << " correct transformations\n"
           "  " << num_unsound << " incorrect transformations\n"
           "  " << num_failed  << " failed-to-prove transformations\n"
           "  " << num_errors << " Alive2 errors\n";
 
-end:
   if (opt_smt_stats)
     smt::solver_print_stats(*out);
 
