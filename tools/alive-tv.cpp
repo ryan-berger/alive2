@@ -755,6 +755,7 @@ class arm2alive_ {
   unsigned int curId;
 
   std::vector<std::unique_ptr<IR::Instr>> visitError(MCInstWrapper &I) {
+    std::flush(cout);
     llvm::errs() << "ERROR: Unsupported arm instruction: "
                  << instrPrinter->getOpcodeName(I.getMCInst().getOpcode());
     exit(1); // for now lets exit the program if the arm instruction is not
