@@ -715,25 +715,25 @@ set<int> s_flag = {
 };
 
 set<int> instrs_32 = {
-    AArch64::ADDWrx,  AArch64::ADDSWrs, AArch64::ADDSWri,  AArch64::ADDWrs,
-    AArch64::ADDWri,  AArch64::ASRVWr, AArch64::SUBWri,  AArch64::SUBWrs,   AArch64::SUBWrx,
-    AArch64::SUBSWrs, AArch64::SUBSWri, AArch64::SBFMWri,  AArch64::CSELWr,
-    AArch64::ANDWri,  AArch64::ANDWrr,  AArch64::MADDWrrr, AArch64::EORWri,
-    AArch64::CSINVWr, AArch64::CSINCWr, AArch64::MOVZWi,   AArch64::MOVNWi,
-    AArch64::MOVKWi,  AArch64::LSLVWr,  AArch64::LSRVWr,   AArch64::ORNWrs,
-    AArch64::UBFMWri, AArch64::BFMWri,  AArch64::ORRWrs,   AArch64::ORRWri,
-    AArch64::SDIVWr,  AArch64::UDIVWr,
+    AArch64::ADDWrx,   AArch64::ADDSWrs, AArch64::ADDSWri, AArch64::ADDWrs,
+    AArch64::ADDWri,   AArch64::ASRVWr,  AArch64::SUBWri,  AArch64::SUBWrs,
+    AArch64::SUBWrx,   AArch64::SUBSWrs, AArch64::SUBSWri, AArch64::SBFMWri,
+    AArch64::CSELWr,   AArch64::ANDWri,  AArch64::ANDWrr,  AArch64::MADDWrrr,
+    AArch64::MSUBWrrr, AArch64::EORWri,  AArch64::CSINVWr, AArch64::CSINCWr,
+    AArch64::MOVZWi,   AArch64::MOVNWi,  AArch64::MOVKWi,  AArch64::LSLVWr,
+    AArch64::LSRVWr,   AArch64::ORNWrs,  AArch64::UBFMWri, AArch64::BFMWri,
+    AArch64::ORRWrs,   AArch64::ORRWri,  AArch64::SDIVWr,  AArch64::UDIVWr,
 };
 
 set<int> instrs_64 = {
-    AArch64::ADDXrx,  AArch64::ADDSXrs, AArch64::ADDSXri,  AArch64::ADDXrs,
-    AArch64::ADDXri,  AArch64::ASRVXr, AArch64::SUBXri,  AArch64::SUBXrs,   AArch64::SUBXrx,
-    AArch64::SUBSXrs, AArch64::SUBSXri, AArch64::SBFMXri,  AArch64::CSELXr,
-    AArch64::ANDXri,  AArch64::ANDXrr,  AArch64::MADDXrrr, AArch64::EORXri,
-    AArch64::CSINVXr, AArch64::CSINCXr, AArch64::MOVZXi,   AArch64::MOVNXi,
-    AArch64::MOVKXi,  AArch64::LSLVXr,  AArch64::LSRVXr,   AArch64::ORNXrs,
-    AArch64::UBFMXri, AArch64::BFMXri,  AArch64::ORRXrs,   AArch64::ORRXri,
-    AArch64::SDIVXr,  AArch64::UDIVXr,
+    AArch64::ADDXrx,   AArch64::ADDSXrs, AArch64::ADDSXri, AArch64::ADDXrs,
+    AArch64::ADDXri,   AArch64::ASRVXr,  AArch64::SUBXri,  AArch64::SUBXrs,
+    AArch64::SUBXrx,   AArch64::SUBSXrs, AArch64::SUBSXri, AArch64::SBFMXri,
+    AArch64::CSELXr,   AArch64::ANDXri,  AArch64::ANDXrr,  AArch64::MADDXrrr,
+    AArch64::MSUBXrrr, AArch64::EORXri,  AArch64::CSINVXr, AArch64::CSINCXr,
+    AArch64::MOVZXi,   AArch64::MOVNXi,  AArch64::MOVKXi,  AArch64::LSLVXr,
+    AArch64::LSRVXr,   AArch64::ORNXrs,  AArch64::UBFMXri, AArch64::BFMXri,
+    AArch64::ORRXrs,   AArch64::ORRXri,  AArch64::SDIVXr,  AArch64::UDIVXr,
 };
 
 bool has_s(int instr) {
@@ -758,6 +758,7 @@ class arm2alive_ {
     std::flush(cout);
     llvm::errs() << "ERROR: Unsupported arm instruction: "
                  << instrPrinter->getOpcodeName(I.getMCInst().getOpcode());
+    llvm::errs().flush();
     exit(1); // for now lets exit the program if the arm instruction is not
              // supported
   }
@@ -795,7 +796,7 @@ class arm2alive_ {
 
     assert(op.isImm() || op.isReg());
 
-    IR::Value* v;
+    IR::Value *v;
     auto ty = &get_int_type(size);
 
     if (op.isImm()) {
@@ -809,7 +810,7 @@ class arm2alive_ {
     } else if (size == 32) {
       auto tmp = getIdentifier(op.getReg(), wrapper->getVarId(idx));
       v = add_instr<IR::ConversionOp>(*ty, move(next_name()), *tmp,
-                                                     IR::ConversionOp::Trunc);
+                                      IR::ConversionOp::Trunc);
     } else {
       assert(false && "unhandled case in get_value*");
     }
@@ -822,8 +823,8 @@ class arm2alive_ {
       int shift_type = ((shift >> 6) & 0x7);
       assert(shift_type == 0 && "shift type not supported on instruction");
       v = add_instr<IR::BinOp>(*ty, move(next_name()), *v,
-                                   *make_intconst(shift & 0x3f, size),
-                                   IR::BinOp::Shl);
+                               *make_intconst(shift & 0x3f, size),
+                               IR::BinOp::Shl);
     }
 
     return v;
@@ -1104,12 +1105,12 @@ public:
       break;
     }
     case AArch64::ASRVWr:
-    case AArch64::ASRVXr:
-    {
+    case AArch64::ASRVXr: {
       auto a = get_value(1);
       auto b = get_value(2);
 
-      auto res = add_instr<IR::BinOp>(*ty, move(next_name()), *a, *b, IR::BinOp::AShr);
+      auto res =
+          add_instr<IR::BinOp>(*ty, move(next_name()), *a, *b, IR::BinOp::AShr);
       store(*res);
       break;
     }
@@ -1195,10 +1196,10 @@ public:
         new_v->addIdx(1);
 
         cur_c = add_instr<IR::ICmp>(*ty_i1, move(next_name()), IR::ICmp::UGE,
-                                               *a, *b);
-
-        cur_z = add_instr<IR::ICmp>(*ty_i1, move(next_name()), IR::ICmp::EQ,
                                     *a, *b);
+
+        cur_z = add_instr<IR::ICmp>(*ty_i1, move(next_name()), IR::ICmp::EQ, *a,
+                                    *b);
 
         cur_v = new_v;
         set_n(result);
@@ -1262,6 +1263,19 @@ public:
       store(*add);
       break;
     }
+    case AArch64::MSUBWrrr:
+    case AArch64::MSUBXrrr: {
+      auto mul_lhs = get_value(1, 0);
+      auto mul_rhs = get_value(2, 0);
+      auto minuend = get_value(3, 0);
+
+      auto mul = add_instr<IR::BinOp>(*ty, move(next_name()), *mul_lhs,
+                                      *mul_rhs, IR::BinOp::Mul);
+      auto sub = add_instr<IR::BinOp>(*ty, move(next_name()), *mul, *minuend,
+                                      IR::BinOp::Sub);
+      store(*sub);
+      break;
+    }
     case AArch64::SBFMWri:
     case AArch64::SBFMXri: {
       auto src = get_value(1);
@@ -1315,33 +1329,32 @@ public:
 
       // SBFIZ
       if (imms < immr) {
-        
+
         auto pos = size - immr;
         auto width = imms + 1;
         auto mask = ((uint64_t)1 << (width)) - 1;
-        auto bitfield_mask = (uint64_t)1 << (width-1);
-         
+        auto bitfield_mask = (uint64_t)1 << (width - 1);
+
         auto masked =
             add_instr<IR::BinOp>(*ty, move(next_name()), *src,
                                  *make_intconst(mask, size), IR::BinOp::And);
-        
-        auto bitfield_lsb =
-            add_instr<IR::BinOp>(*ty, move(next_name()), *src,
-                                 *make_intconst(bitfield_mask, size), IR::BinOp::And);
 
-        auto insert_ones = 
+        auto bitfield_lsb = add_instr<IR::BinOp>(
+            *ty, move(next_name()), *src, *make_intconst(bitfield_mask, size),
+            IR::BinOp::And);
+
+        auto insert_ones =
             add_instr<IR::BinOp>(*ty, move(next_name()), *masked,
-                                                *make_intconst(~mask, size), IR::BinOp::Or);
-        
+                                 *make_intconst(~mask, size), IR::BinOp::Or);
+
         auto cond_ty = &get_int_type(1);
 
-        auto bitfield_lsb_set = add_instr<IR::ICmp>(*cond_ty, move(next_name()), IR::ICmp::NE,
-                                          *bitfield_lsb, *make_intconst(0, size));
+        auto bitfield_lsb_set =
+            add_instr<IR::ICmp>(*cond_ty, move(next_name()), IR::ICmp::NE,
+                                *bitfield_lsb, *make_intconst(0, size));
 
-        
-        auto res = add_instr<IR::Select>(*ty, move(next_name()),
-                                                      *bitfield_lsb_set, *insert_ones,
-                                                      *masked);
+        auto res = add_instr<IR::Select>(
+            *ty, move(next_name()), *bitfield_lsb_set, *insert_ones, *masked);
         auto shifted_res =
             add_instr<IR::BinOp>(*ty, move(next_name()), *res,
                                  *make_intconst(pos, size), IR::BinOp::Shl);
@@ -1349,20 +1362,20 @@ public:
         return;
       }
       // FIXME: this requires checking if SBFX is preferred.
-      // For now, assume this is always SBFX 
+      // For now, assume this is always SBFX
       auto width = imms + 1;
       auto mask = ((uint64_t)1 << (width)) - 1;
       auto pos = immr;
 
       auto masked =
-            add_instr<IR::BinOp>(*ty, move(next_name()), *src,
-                                 *make_intconst(mask, size), IR::BinOp::And);
-      auto l_shifted =
-            add_instr<IR::BinOp>(*ty, move(next_name()), *masked,
-                                 *make_intconst(size - width, size), IR::BinOp::Shl);
-      auto shifted_res =
-            add_instr<IR::BinOp>(*ty, move(next_name()), *l_shifted,
-                                 *make_intconst(size - width + pos , size), IR::BinOp::AShr);
+          add_instr<IR::BinOp>(*ty, move(next_name()), *src,
+                               *make_intconst(mask, size), IR::BinOp::And);
+      auto l_shifted = add_instr<IR::BinOp>(*ty, move(next_name()), *masked,
+                                            *make_intconst(size - width, size),
+                                            IR::BinOp::Shl);
+      auto shifted_res = add_instr<IR::BinOp>(
+          *ty, move(next_name()), *l_shifted,
+          *make_intconst(size - width + pos, size), IR::BinOp::AShr);
       store(*shifted_res);
       return;
     }
@@ -1584,14 +1597,14 @@ public:
       auto pos = immr;
 
       auto masked =
-            add_instr<IR::BinOp>(*ty, move(next_name()), *src,
-                                 *make_intconst(mask, size), IR::BinOp::And);
+          add_instr<IR::BinOp>(*ty, move(next_name()), *src,
+                               *make_intconst(mask, size), IR::BinOp::And);
       auto shifted_res =
-            add_instr<IR::BinOp>(*ty, move(next_name()), *masked,
-                                 *make_intconst(pos, size), IR::BinOp::LShr);
+          add_instr<IR::BinOp>(*ty, move(next_name()), *masked,
+                               *make_intconst(pos, size), IR::BinOp::LShr);
       store(*shifted_res);
       return;
-      //assert(false && "UBFX not supported");
+      // assert(false && "UBFX not supported");
     }
     case AArch64::BFMWri:
     case AArch64::BFMXri: {
@@ -1628,10 +1641,10 @@ public:
       auto pos = size - immr;
 
       // This mask deletes `bits` number of bits starting at `pos`.
-      // If the mask is for a 32 bit value, it will chop off the top 32 bits of the 64 bit mask
-      // to keep the mask to a size of 32 bits
-      auto mask = ~((((uint64_t)1 << bits) - 1) << pos) & 
-                   ((uint64_t)-1 >> (64 - size));
+      // If the mask is for a 32 bit value, it will chop off the top 32 bits of
+      // the 64 bit mask to keep the mask to a size of 32 bits
+      auto mask =
+          ~((((uint64_t)1 << bits) - 1) << pos) & ((uint64_t)-1 >> (64 - size));
 
       // get `bits` number of bits from the least significant bits
       auto bitfield = add_instr<IR::BinOp>(
@@ -1659,10 +1672,12 @@ public:
       auto lhs = get_value(1);
 
       auto imm = mc_inst.getOperand(2).isImm();
-      auto [decoded, _] = decode_bit_mask(size == 64, imm & (-1 << 6), imm >> 6, true, size);
+      auto [decoded, _] =
+          decode_bit_mask(size == 64, imm & (-1 << 6), imm >> 6, true, size);
 
-      auto result = add_instr<IR::BinOp>(*ty, move(next_name()), *lhs, *make_intconst(decoded.getZExtValue(), size),
-                                         IR::BinOp::Or);
+      auto result = add_instr<IR::BinOp>(
+          *ty, move(next_name()), *lhs,
+          *make_intconst(decoded.getZExtValue(), size), IR::BinOp::Or);
       store(*result);
       break;
     }
@@ -1787,14 +1802,16 @@ public:
 
       stored = add_instr<IR::Freeze>(typ, move(next_name()), *stored);
       if (typ.bits() < 64) {
-        
+
         auto extended_type = &get_int_type(64);
         if (input_ptr->getAttributes().has(IR::ParamAttrs::Sext))
-          stored = add_instr<IR::ConversionOp>(*extended_type, move(next_name()),
-                                             *stored, IR::ConversionOp::SExt);
+          stored =
+              add_instr<IR::ConversionOp>(*extended_type, move(next_name()),
+                                          *stored, IR::ConversionOp::SExt);
         else
-          stored = add_instr<IR::ConversionOp>(*extended_type, move(next_name()),
-                                             *stored, IR::ConversionOp::ZExt);
+          stored =
+              add_instr<IR::ConversionOp>(*extended_type, move(next_name()),
+                                          *stored, IR::ConversionOp::ZExt);
       }
 
       instructionCount++;
@@ -2846,8 +2863,9 @@ bool backendTV() {
 #define ARGS_MODULE_VAR M1
 #include "llvm_util/cmd_args_def.h"
 
-  //FIXME: For now, we're hardcoding the target triple
-  M1.get()->setDataLayout("e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128");
+  // FIXME: For now, we're hardcoding the target triple
+  M1.get()->setDataLayout(
+      "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128");
   auto &DL = M1.get()->getDataLayout();
   llvm::Triple targetTriple(M1.get()->getTargetTriple());
   llvm::TargetLibraryInfoWrapperPass TLI(targetTriple);
@@ -2876,7 +2894,7 @@ bool backendTV() {
   if (opt_global_isel) {
     TM->setGlobalISel(true);
   }
-   
+
   llvm::SmallString<1024> Asm;
   llvm::raw_svector_ostream Dest(Asm);
 
